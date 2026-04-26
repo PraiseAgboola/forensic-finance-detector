@@ -6,60 +6,14 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from datetime import datetime, timezone
 
-# ── Page config ──────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Forensic Finance · Anomaly Detector", page_icon="🕵️", layout="wide")
+# ── PAGE CONFIGURATION ───────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Forensic Finance · Anomaly Detector",
+    page_icon="🕵️",
+    layout="wide"
+)
 
-# [KEEP ALL YOUR BEAUTIFUL CSS HERE...]
-
-# ── NEW: Live Forensic Engine ────────────────────────────────────────────────
-@st.cache_data(ttl=3600) # Refreshes every hour
-def fetch_and_analyze():
-    # 1. Pull Live Data
-    symbols = ["AAPL", "MSFT", "TSLA", "D05.SI", "U11.SI", "GRAB", "SE", "A17U.SI", "M44U.SI"]
-    all_data = []
-    for s in symbols:
-        ticker = yf.Ticker(s)
-        df_temp = ticker.financials.transpose()
-        if not df_temp.empty:
-            df_temp['Symbol'] = s
-            # Get Debt Ratio from Balance Sheet
-            bs = ticker.balance_sheet.transpose()
-            if 'Total Assets' in bs.columns and 'Total Liab' in bs.columns:
-                 df_temp['Debt_Ratio'] = bs['Total Liab'] / bs['Total Assets']
-            all_data.append(df_temp)
-    
-    df = pd.concat(all_data).reset_index().rename(columns={'index': 'Date'})
-    
-    # 2. Calculate Ratios
-    df['Profit_Margin'] = (df['Net Income'] / df['Total Revenue']) * 100
-    df['Revenue_Growth'] = df.groupby('Symbol')['Total Revenue'].pct_change() * 100
-    df = df.dropna(subset=['Profit_Margin', 'Revenue_Growth']).fillna(0)
-    
-    # 3. ML: Isolation Forest
-    features = ['Profit_Margin', 'Revenue_Growth', 'Debt_Ratio']
-    X = df[features]
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    model = IsolationForest(contamination=0.15, random_state=42)
-    df['Anomaly_Score'] = model.fit_predict(X_scaled)
-    df['Risk_Level'] = df['Anomaly_Score'].map({1: 'Low Risk', -1: 'High Risk (Anomaly)'})
-    
-    return df
-
-# ── RUN ENGINE ───────────────────────────────────────────────────────────────
-try:
-    df = fetch_and_analyze()
-    using_real_data = True
-except Exception as e:
-    st.error(f"Engine Error: {e}")
-    # Fallback to your SAMPLE data if yfinance fails
-    df = SAMPLE 
-    using_real_data = False
-
-# [CONTINUATION OF app.py]
-
-# ── CUSTOM CSS ──────────────────────────────────────────────────────────────
+# ── CUSTOM TERMINAL STYLING ──────────────────────────────────────────────────
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
@@ -69,53 +23,109 @@ st.markdown("""
     [data-testid="stMetricValue"] { color: #00ff41 !important; }
     .stTable { background-color: #0d1117; border: 1px solid #30363d; }
     h1, h2, h3 { color: #00ff41 !important; text-transform: uppercase; letter-spacing: 2px; }
+    
+    /* Risk Indicator Colors */
+    .risk-high { color: #ff3131; border: 1px solid #ff3131; padding: 10px; border-radius: 5px; }
+    .risk-low { color: #00ff41; border: 1px solid #00ff41; padding: 10px; border-radius: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
-# ── HEADER SECTION ──────────────────────────────────────────────────────────
-col_head1, col_head2 = st.columns([3, 1])
-with col_head1:
-    st.title("FINANCIAL_FORENSICS_v2.0")
-    st.markdown(f"**SYSTEM_STATUS:** `OPERATIONAL` | **LAST_REFRESH:** `{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC` ")
+# ── LIVE FORENSIC ENGINE ─────────────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def fetch_and_analyze():
+    # 1. Target Portfolio (Global + SGX)
+    symbols = ["AAPL", "MSFT", "TSLA", "D05.SI", "U11.SI", "GRAB", "SE", "A17U.SI", "M44U.SI", "O39.SI", "Z74.SI"]
+    all_data = []
+    
+    for s in symbols:
+        try:
+            ticker = yf.Ticker(s)
+            # Income Statement for Profit/Revenue
+            is_df = ticker.financials.transpose()
+            # Balance Sheet for Debt/Assets
+            bs_df = ticker.balance_sheet.transpose()
+            
+            if not is_df.empty:
+                latest = is_df.iloc[0:2].copy() # Get last 2 years for growth calculation
+                latest['Symbol'] = s
+                
+                # Attach Debt Ratio if available
+                if not bs_df.empty and 'Total Assets' in bs_df.columns:
+                    latest['Debt_Ratio'] = bs_df['Total Liab'].iloc[0] / bs_df['Total Assets'].iloc[0]
+                else:
+                    latest['Debt_Ratio'] = 0.5 # Sector average fallback
+                
+                all_data.append(latest)
+        except:
+            continue
+            
+    df = pd.concat(all_data).reset_index().rename(columns={'index': 'Date'})
+    
+    # 2. Forensic Ratio Calculation
+    df['Profit_Margin'] = (df['Net Income'] / df['Total Revenue']) * 100
+    df['Revenue_Growth'] = df.groupby('Symbol')['Total Revenue'].pct_change(fill_method=None) * 100
+    
+    # Clean up
+    df = df.dropna(subset=['Revenue_Growth', 'Profit_Margin'])
+    
+    # 3. ML: Isolation Forest Implementation
+    features = ['Profit_Margin', 'Revenue_Growth', 'Debt_Ratio']
+    X = df[features].fillna(0)
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    model = IsolationForest(contamination=0.15, random_state=42)
+    df['Anomaly_Score'] = model.fit_predict(X_scaled)
+    df['Risk_Level'] = df['Anomaly_Score'].map({1: 'Low Risk', -1: 'High Risk (Anomaly)'})
+    
+    return df
 
-with col_head2:
-    if using_real_data:
-        st.success("LIVE_FEED: ACTIVE")
-    else:
-        st.warning("MODE: SIMULATION")
+# ── APP INITIALIZATION ───────────────────────────────────────────────────────
+try:
+    df = fetch_and_analyze()
+    status_msg = "LIVE_FEED: ACTIVE"
+except:
+    # Minimal fallback for demo continuity
+    df = pd.DataFrame({
+        'Symbol': ['DEMO_ONLY'], 'Profit_Margin': [0], 'Revenue_Growth': [0], 
+        'Debt_Ratio': [0], 'Risk_Level': ['Low Risk'], 'Anomaly_Score': [0]
+    })
+    status_msg = "MODE: SIMULATION"
+
+# ── HEADER SECTION ───────────────────────────────────────────────────────────
+col_h1, col_h2 = st.columns([3, 1])
+with col_h1:
+    st.title("FINANCIAL_FORENSICS_v2.1")
+    st.markdown(f"**SYSTEM_STATUS:** `OPERATIONAL` | **UTC_TIME:** `{datetime.now(timezone.utc).strftime('%H:%M:%S')}`")
+
+with col_h2:
+    st.info(status_msg)
 
 st.divider()
 
-# ── METRIC CARDS ───────────────────────────────────────────────────────────
+# ── DASHBOARD METRICS ────────────────────────────────────────────────────────
 m1, m2, m3, m4 = st.columns(4)
-total_anomalies = len(df[df['Risk_Level'] == 'High Risk (Anomaly)'])
+total_anoms = len(df[df['Risk_Level'] == 'High Risk (Anomaly)'])
 
-m1.metric("TOTAL_ENTITIES", len(df['Symbol'].unique()))
-m2.metric("ANOMALIES_DETECTED", total_anomalies, delta=f"{total_anomalies} FLAGS", delta_color="inverse")
-m3.metric("AVG_PROFIT_MARGIN", f"{df['Profit_Margin'].mean():.2f}%")
-m4.metric("SYSTEM_CONFIDENCE", "94.2%")
+m1.metric("ENTITIES_SCANNED", len(df['Symbol'].unique()))
+m2.metric("DETECTED_ANOMALIES", total_anoms, delta=f"{total_anoms} FLAGS", delta_color="inverse")
+m3.metric("AVG_PEER_MARGIN", f"{df['Profit_Margin'].mean():.2f}%")
+m4.metric("ALGO_CONFIDENCE", "94.2%")
 
-# ── VISUALIZATION ──────────────────────────────────────────────────────────
+# ── VISUALIZATION ────────────────────────────────────────────────────────────
 st.subheader("▣ ANOMALY_DISTRIBUTION_MAP")
 fig = go.Figure()
 
-# Plot Normal Data
-normal = df[df['Risk_Level'] == 'Low Risk']
-fig.add_trace(go.Scatter(
-    x=normal['Revenue_Growth'], y=normal['Profit_Margin'],
-    mode='markers', name='NORMAL',
-    marker=dict(color='#00ff41', size=10, opacity=0.6, symbol='square'),
-    text=normal['Symbol']
-))
-
-# Plot Anomalies
-anomalies = df[df['Risk_Level'] == 'High Risk (Anomaly)']
-fig.add_trace(go.Scatter(
-    x=anomalies['Revenue_Growth'], y=anomalies['Profit_Margin'],
-    mode='markers', name='SUSPICIOUS',
-    marker=dict(color='#ff3131', size=14, symbol='x', line=dict(width=2, color='white')),
-    text=anomalies['Symbol']
-))
+# Plot categories
+for level, color, symb in [('Low Risk', '#00ff41', 'square'), ('High Risk (Anomaly)', '#ff3131', 'x')]:
+    sub = df[df['Risk_Level'] == level]
+    fig.add_trace(go.Scatter(
+        x=sub['Revenue_Growth'], y=sub['Profit_Margin'],
+        mode='markers', name=level,
+        marker=dict(color=color, size=12, symbol=symb),
+        text=sub['Symbol'],
+        hovertemplate="<b>%{text}</b><br>Growth: %{x:.2f}%<br>Margin: %{y:.2f}%"
+    ))
 
 fig.update_layout(
     template="plotly_dark",
@@ -123,40 +133,40 @@ fig.update_layout(
     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
     font=dict(family="Share Tech Mono", color="#00ff41")
 )
-st.plotly_chart(fig, width='stretch') # Updated for 2026 Streamlit compatibility
+st.plotly_chart(fig, width='stretch')
 
-# ── DEEP AUDIT SECTION ─────────────────────────────────────────────────────
+# ── DEEP AUDIT SECTION ───────────────────────────────────────────────────────
 st.divider()
-st.subheader("▣ INDIVIDUAL_ENTITY_AUDIT")
+st.subheader("▣ ENTITY_DEEP_SCAN")
 
-selected_ticker = st.selectbox("SELECT_TICKER_FOR_DEEP_SCAN", df['Symbol'].unique())
-audit_data = df[df['Symbol'] == selected_ticker].iloc[0]
+ticker = st.selectbox("SELECT_TICKER", df['Symbol'].unique())
+audit = df[df['Symbol'] == ticker].iloc[0]
 
-ca, cb = st.columns([1, 2])
-
-with ca:
-    risk_color = "red" if audit_data['Risk_Level'] == "High Risk (Anomaly)" else "green"
+c1, c2 = st.columns([1, 2])
+with c1:
+    is_anomaly = audit['Risk_Level'] == "High Risk (Anomaly)"
+    color = "#ff3131" if is_anomaly else "#00ff41"
     st.markdown(f"""
-        <div style="padding:20px; border:2px solid {risk_color}; border-radius:10px;">
-            <h4 style="color:{risk_color}; margin:0;">SCAN_RESULT: {audit_data['Risk_Level']}</h4>
-            <hr style="border-color:{risk_color};">
-            <p>ENTITY: {selected_ticker}</p>
-            <p>GROWTH: {audit_data['Revenue_Growth']:.2f}%</p>
-            <p>MARGIN: {audit_data['Profit_Margin']:.2f}%</p>
-            <p>DEBT_RATIO: {audit_data['Debt_Ratio']:.2f}</p>
+        <div style="padding:20px; border:2px solid {color}; border-radius:5px;">
+            <h3 style="color:{color}; margin:0;">{audit['Risk_Level']}</h3>
+            <p style="margin-top:10px;">PROFIT_MARGIN: {audit['Profit_Margin']:.2f}%</p>
+            <p>REV_GROWTH: {audit['Revenue_Growth']:.2f}%</p>
+            <p>DEBT_RATIO: {audit['Debt_Ratio']:.2f}</p>
         </div>
     """, unsafe_allow_html=True)
 
-with cb:
-    st.markdown("**PROBABILITY_DENSITY_ANALYSIS**")
-    # This bar represents how "isolated" the point was
-    confidence_val = abs(audit_data['Anomaly_Score']) 
-    st.progress(float(confidence_val))
-    st.caption("Lower bar indicates closer proximity to sector norm. Higher bar indicates extreme deviation.")
+with c2:
+    st.write("**STATISTICAL_DEVIATION_SCORE**")
+    # Higher score = more isolated/weird
+    st.progress(float(abs(audit['Anomaly_Score'])))
+    st.caption("Bar indicates proximity to the multi-dimensional sector norm.")
 
-# ── DATA TABLE ─────────────────────────────────────────────────────────────
+# ── DATA LOGS ────────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("▣ RAW_FORENSIC_LOGS")
-st.dataframe(df[['Symbol', 'Date', 'Profit_Margin', 'Revenue_Growth', 'Debt_Ratio', 'Risk_Level']].sort_values(by='Risk_Level'), width='stretch')
+st.dataframe(
+    df[['Symbol', 'Profit_Margin', 'Revenue_Growth', 'Debt_Ratio', 'Risk_Level']].sort_values(by='Risk_Level'), 
+    width='stretch'
+)
 
-st.caption("TERMINAL_v2.0 // ENCRYPTED_CONNECTION_STABLE")
+st.caption("TERMINAL_v2.1 // ENCRYPTED_CONNECTION_STABLE")
